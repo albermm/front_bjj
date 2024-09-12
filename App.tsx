@@ -1,9 +1,9 @@
 import React, { useState, useEffect } from 'react';
 import 'react-native-url-polyfill/auto';
-import { View, Button, Image, Text, StyleSheet, Alert, TextInput } from 'react-native';
+import { View, Button, Image, Text, StyleSheet, Alert, TextInput, Platform } from 'react-native';
 import { launchImageLibrary, ImageLibraryOptions, Asset } from 'react-native-image-picker';
 import axios, { AxiosError } from 'axios';
-import { CognitoIdentityClient } from "@aws-sdk/client-cognito-identity";
+import { CognitoIdentityClient, GetIdCommand } from "@aws-sdk/client-cognito-identity";
 import { fromCognitoIdentityPool } from "@aws-sdk/credential-provider-cognito-identity";
 import { CognitoUserPool, CognitoUser, AuthenticationDetails, CognitoUserSession } from 'amazon-cognito-identity-js';
 import 'react-native-get-random-values';
@@ -198,6 +198,7 @@ const App = () => {
     });
   };
 
+
   const pickImage = async () => {
     const options: ImageLibraryOptions = {
       mediaType: 'photo',
@@ -220,6 +221,7 @@ const App = () => {
       Alert.alert('Error', 'Failed to pick image');
     }
   };
+
 
   const uploadImage = async (asset: Asset) => {
     if (!asset.uri) return;
@@ -244,18 +246,24 @@ const App = () => {
         throw new Error('Presigned POST data not provided by the API');
       }
   
-      const response = await fetch(asset.uri);
-      const blob = await response.blob();
-  
       const formData = new FormData();
       Object.entries(presigned_post.fields).forEach(([key, value]) => {
         formData.append(key, value as string);
       });
-      formData.append('file', blob, file_name);
+  
+      // Append file to FormData
+      formData.append('file', {
+        uri: asset.uri,
+        type: asset.type || 'image/jpeg', // Provide a default MIME type if not available
+        name: file_name,
+      } as any);
   
       const uploadResponse = await fetch(presigned_post.url, {
         method: 'POST',
         body: formData,
+        headers: {
+          'Content-Type': 'multipart/form-data',
+        },
       });
   
       if (!uploadResponse.ok) {
@@ -342,7 +350,7 @@ const App = () => {
     poll();
   };
 
-  
+
   if (!isAuthenticated) {
     if (changePasswordRequired) {
       return (
