@@ -238,24 +238,32 @@ const App = () => {
       });
       console.log('API Response:', urlResponse.data);
   
-      const { file_name, upload_url } = urlResponse.data;
+      const { file_name, presigned_post, job_id } = urlResponse.data;
   
-      if (!upload_url) {
-        throw new Error('Upload URL not provided by the API');
+      if (!presigned_post || !presigned_post.url) {
+        throw new Error('Presigned POST data not provided by the API');
       }
   
       const response = await fetch(asset.uri);
       const blob = await response.blob();
-      await fetch(upload_url, {
-        method: 'PUT',
-        body: blob,
-        headers: {
-          'Content-Type': asset.type || 'image/jpeg',
-        },
+  
+      const formData = new FormData();
+      Object.entries(presigned_post.fields).forEach(([key, value]) => {
+        formData.append(key, value as string);
+      });
+      formData.append('file', blob, file_name);
+  
+      const uploadResponse = await fetch(presigned_post.url, {
+        method: 'POST',
+        body: formData,
       });
   
+      if (!uploadResponse.ok) {
+        throw new Error(`Upload failed with status ${uploadResponse.status}`);
+      }
+  
       Alert.alert('Success', 'Image uploaded successfully');
-      pollForResult(file_name);
+      pollForResult(file_name, job_id);
     } catch (error: unknown) {
       console.error('Error in uploadImage:', error);
       if (axios.isAxiosError(error) && error.response) {
@@ -268,7 +276,7 @@ const App = () => {
       setIsUploading(false);
     }
   };
-
+  
   const pollForResult = async (fileName: string) => {
     setIsProcessing(true);
     let retries = 0;
