@@ -276,43 +276,44 @@ const App = () => {
       setIsUploading(false);
     }
   };
-  
-  const pollForResult = async (fileName: string) => {
+
+  const pollForResult = async (fileName: string, jobId: string) => {
     setIsProcessing(true);
     let retries = 0;
-    const maxRetries = 10;
-    const retryDelay = 5000; // 5 seconds
+    const maxRetries = 60; // Increased for longer processes
+    const initialRetryDelay = 5000; // 5 seconds
+    const longRetryDelay = 30000; // 30 seconds
   
     const poll = async () => {
       try {
-        const credentials = await getCredentials(); // Get fresh credentials
+        const credentials = await getCredentials();
         console.log('Polling with credentials:', credentials.identityId);
         
-        const response = await axios.get(`${API_URL}/get_result/${fileName}`, {
+        const response = await axios.get(`${API_URL}/get_job_status/${jobId}`, {
           headers: {
-            'Authorization': `Bearer ${credentials.token}` // If you're using a token
+            'Authorization': `Bearer ${credentials.token}`
           }
         });
   
-        const { status, keypoints_file, position, message } = response.data;
+        const { status, image_url, keypoints_url, position } = response.data;
   
-        if (status === 'processing') {
+        if (status === 'PROCESSING') {
           if (retries < maxRetries) {
-            console.log(`Still processing, retrying in ${retryDelay / 1000} seconds...`);
+            console.log(`Still processing, retrying in ${retries < 12 ? initialRetryDelay : longRetryDelay / 1000} seconds...`);
             retries++;
-            setTimeout(poll, retryDelay);
+            setTimeout(poll, retries < 12 ? initialRetryDelay : longRetryDelay);
           } else {
             console.error('Max retries reached');
             Alert.alert('Error', 'Processing timed out');
             setIsProcessing(false);
           }
-        } else if (status === 'error') {
-          console.error('Error:', message);
-          Alert.alert('Error', message);
+        } else if (status === 'FAILED') {
+          console.error('Processing failed');
+          Alert.alert('Error', 'Processing failed');
           setIsProcessing(false);
-        } else if (status === 'success') {
+        } else if (status === 'COMPLETED') {
           setResult({
-            keypointsImage: `https://${BUCKET_NAME}.s3.amazonaws.com/${keypoints_file}`,
+            keypointsImage: image_url,
             positionName: position,
           });
           setIsProcessing(false);
@@ -339,8 +340,9 @@ const App = () => {
     };
   
     poll();
-  }
+  };
 
+  
   if (!isAuthenticated) {
     if (changePasswordRequired) {
       return (
