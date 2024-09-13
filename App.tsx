@@ -325,6 +325,12 @@ const App = () => {
             positionName: position,
           });
           setIsProcessing(false);
+          Alert.alert('Processing Complete', `Your image has been processed. The detected position is: ${position}`);
+        } else {
+          console.error('Unknown status:', status);
+          Alert.alert('Error', 'An unexpected error occurred. Please try again.');
+          setIsProcessing(false);
+      
         }
       } catch (error) {
         console.error('Error polling for result:', error);
