@@ -254,7 +254,7 @@ const App = () => {
       // Append file to FormData
       formData.append('file', {
         uri: asset.uri,
-        type: asset.type || 'image/jpeg', // Provide a default MIME type if not available
+        type: asset.type || 'image/jpeg', 
         name: file_name,
       } as any);
   
@@ -303,9 +303,18 @@ const App = () => {
           }
         });
   
-        const { status, image_url, keypoints_url, position } = response.data;
+        const { status, image_url, keypoints_url, position, updatedAt } = response.data;
   
-        if (status === 'PROCESSING') {
+        console.log(`Job status: ${status}, Updated at: ${updatedAt}`);
+  
+        if (status === 'success') {
+          setResult({
+            keypointsImage: image_url,
+            positionName: position,
+          });
+          setIsProcessing(false);
+          Alert.alert('Processing Complete', `Your image has been processed. The detected position is: ${position}`);
+        } else if (status === 'PROCESSING' || !status) {
           if (retries < maxRetries) {
             console.log(`Still processing, retrying in ${retries < 12 ? initialRetryDelay : longRetryDelay / 1000} seconds...`);
             retries++;
@@ -315,22 +324,10 @@ const App = () => {
             Alert.alert('Error', 'Processing timed out');
             setIsProcessing(false);
           }
-        } else if (status === 'FAILED') {
-          console.error('Processing failed');
-          Alert.alert('Error', 'Processing failed');
-          setIsProcessing(false);
-        } else if (status === 'COMPLETED') {
-          setResult({
-            keypointsImage: image_url,
-            positionName: position,
-          });
-          setIsProcessing(false);
-          Alert.alert('Processing Complete', `Your image has been processed. The detected position is: ${position}`);
         } else {
           console.error('Unknown status:', status);
           Alert.alert('Error', 'An unexpected error occurred. Please try again.');
           setIsProcessing(false);
-      
         }
       } catch (error) {
         console.error('Error polling for result:', error);
@@ -338,6 +335,16 @@ const App = () => {
           console.error('Error response:', error.response?.data);
           console.error('Error status:', error.response?.status);
           console.error('Error headers:', error.response?.headers);
+          
+          if (error.response?.status === 404) {
+            console.error('Job not found. It might not have been created yet.');
+            if (retries < maxRetries) {
+              console.log(`Job not found, retrying in ${initialRetryDelay / 1000} seconds...`);
+              retries++;
+              setTimeout(poll, initialRetryDelay);
+              return;
+            }
+          }
           
           if (error.response?.status === 403) {
             console.error('Authentication error. Ensure your credentials are correct.');
@@ -354,7 +361,7 @@ const App = () => {
     };
   
     poll();
-  };
+  }
 
 
   if (!isAuthenticated) {
