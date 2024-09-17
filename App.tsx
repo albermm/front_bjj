@@ -1,9 +1,9 @@
 import React, { useState, useEffect } from 'react';
 import 'react-native-url-polyfill/auto';
-import { View, Button, Image, Text, StyleSheet, Alert, TextInput, Platform } from 'react-native';
+import { View, Button, Image, Text, StyleSheet, Alert, TextInput, ActivityIndicator } from 'react-native';
 import { launchImageLibrary, ImageLibraryOptions, Asset } from 'react-native-image-picker';
-import axios, { AxiosError } from 'axios';
-import { CognitoIdentityClient, GetIdCommand } from "@aws-sdk/client-cognito-identity";
+import axios from 'axios';
+import { CognitoIdentityClient } from "@aws-sdk/client-cognito-identity";
 import { fromCognitoIdentityPool } from "@aws-sdk/credential-provider-cognito-identity";
 import { CognitoUserPool, CognitoUser, AuthenticationDetails, CognitoUserSession } from 'amazon-cognito-identity-js';
 import 'react-native-get-random-values';
@@ -11,9 +11,8 @@ import 'react-native-get-random-values';
 const API_URL = 'https://sflkpf7ivf.execute-api.us-east-1.amazonaws.com/testing';
 const IDENTITY_POOL_ID = 'us-east-1:fb9b4aa0-5b5d-40fc-97b0-7f51471252e6';
 const USER_POOL_ID = 'us-east-1_QJJ74aa1b';
-const CLIENT_ID = '6m04urkdq3o76k6gjah9jm99p9'; 
+const CLIENT_ID = '6m04urkdq3o76k6gjah9jm99p9';
 const REGION = 'us-east-1';
-const BUCKET_NAME = 'bjj-pics';
 
 const userPool = new CognitoUserPool({
   UserPoolId: USER_POOL_ID,
@@ -25,6 +24,7 @@ const styles = StyleSheet.create({
     flex: 1,
     justifyContent: 'center',
     alignItems: 'center',
+    padding: 20,
   },
   image: {
     width: 200,
@@ -44,19 +44,24 @@ const styles = StyleSheet.create({
     marginBottom: 10,
     paddingLeft: 10,
   },
+  buttonContainer: {
+    marginTop: 10,
+    width: '100%',
+  },
 });
 
 const App = () => {
   const [selectedImage, setSelectedImage] = useState<string | null>(null);
   const [isUploading, setIsUploading] = useState(false);
-  const [result, setResult] = useState<{ keypointsImage: string; positionName: string } | null>(null);
   const [isProcessing, setIsProcessing] = useState(false);
+  const [result, setResult] = useState<{ keypointImageUrl: string; predictedPosition: string } | null>(null);
   const [isAuthenticated, setIsAuthenticated] = useState(false);
   const [username, setUsername] = useState('');
   const [password, setPassword] = useState('');
   const [newPassword, setNewPassword] = useState('');
   const [changePasswordRequired, setChangePasswordRequired] = useState(false);
   const [cognitoUser, setCognitoUser] = useState<CognitoUser | null>(null);
+  const [currentJobId, setCurrentJobId] = useState<string | null>(null);
 
   useEffect(() => {
     checkAuthState();
@@ -120,14 +125,10 @@ const App = () => {
         },
       });
     } catch (error) {
-        console.error('Error signing in:', error);
-        if (error instanceof Error) {
-          console.error('Error message:', error.message);
-          console.error('Error stack:', error.stack);
-        }
-        Alert.alert('Error', `Failed to sign in: ${error}`);
-      }
-    };
+      console.error('Error signing in:', error);
+      Alert.alert('Error', `Failed to sign in: ${error}`);
+    }
+  };
 
   const completeNewPasswordChallenge = () => {
     if (!cognitoUser) {
@@ -135,16 +136,20 @@ const App = () => {
       return;
     }
 
-    cognitoUser.completeNewPasswordChallenge(newPassword, {}, {
-      onSuccess: (session: CognitoUserSession) => {
-        setIsAuthenticated(true);
-        setChangePasswordRequired(false);
-      },
-      onFailure: (err: any) => {
-        console.error('Error changing password:', err);
-        Alert.alert('Error', 'Failed to change password');
-      },
-    });
+    cognitoUser.completeNewPasswordChallenge(
+      newPassword,
+      {},
+      {
+        onSuccess: (session: CognitoUserSession) => {
+          setIsAuthenticated(true);
+          setChangePasswordRequired(false);
+        },
+        onFailure: (err: any) => {
+          console.error('Error changing password:', err);
+          Alert.alert('Error', 'Failed to change password');
+        },
+      }
+    );
   };
 
   const signOut = async () => {
@@ -152,43 +157,43 @@ const App = () => {
       cognitoUser.signOut();
       setCognitoUser(null);
       setIsAuthenticated(false);
+      setResult(null);
+      setCurrentJobId(null);
     }
   };
 
   const getCredentials = async (): Promise<{ identityId: string; token: string }> => {
     if (!cognitoUser) {
-      console.error('No cognitoUser found');
       throw new Error('User not authenticated');
     }
-  
+
     return new Promise((resolve, reject) => {
       cognitoUser.getSession((err: Error | null, session: CognitoUserSession | null) => {
         if (err) {
-          console.error('Error getting session:', err);
           reject(err);
           return;
         }
+
         if (!session) {
           reject(new Error('No session found'));
           return;
         }
-  
-        console.log('Session obtained successfully');
+
         const cognitoIdentityClient = new CognitoIdentityClient({
           credentials: fromCognitoIdentityPool({
-            clientConfig: { region: "us-east-1" },
+            clientConfig: { region: REGION },
             identityPoolId: IDENTITY_POOL_ID,
             logins: {
               [`cognito-idp.${REGION}.amazonaws.com/${USER_POOL_ID}`]: session.getIdToken().getJwtToken(),
             },
           }),
         });
-  
+
         cognitoIdentityClient.config.credentials().then((credentials: any) => {
           if (typeof credentials.identityId === 'string') {
             resolve({
               identityId: credentials.identityId,
-              token: session.getIdToken().getJwtToken() // Add this line
+              token: session.getIdToken().getJwtToken()
             });
           } else {
             reject(new Error('Invalid credentials format'));
@@ -198,13 +203,12 @@ const App = () => {
     });
   };
 
-
   const pickImage = async () => {
     const options: ImageLibraryOptions = {
       mediaType: 'photo',
       includeBase64: false,
-      maxHeight: 200,
-      maxWidth: 200,
+      maxHeight: 2000,
+      maxWidth: 2000,
     };
 
     try {
@@ -222,42 +226,37 @@ const App = () => {
     }
   };
 
-
   const uploadImage = async (asset: Asset) => {
     if (!asset.uri) return;
     setIsUploading(true);
     setResult(null);
-  
+    setCurrentJobId(null);
+
     try {
-      console.log('Getting credentials...');
       const credentials = await getCredentials();
-      console.log('Credentials obtained:', credentials.identityId);
-  
-      console.log('Making API call to:', `${API_URL}/get_upload_url`);
-      console.log('With user_id:', credentials.identityId);
       const urlResponse = await axios.get(`${API_URL}/get_upload_url`, {
-        params: { user_id: credentials.identityId },
+        params: { 
+          file_type: 'image',
+          user_id: credentials.identityId 
+        },
+        headers: {
+          'Authorization': `Bearer ${credentials.token}`
+        }
       });
-      console.log('API Response:', urlResponse.data);
-  
+
       const { file_name, presigned_post, job_id } = urlResponse.data;
-  
-      if (!presigned_post || !presigned_post.url) {
-        throw new Error('Presigned POST data not provided by the API');
-      }
-  
+
       const formData = new FormData();
       Object.entries(presigned_post.fields).forEach(([key, value]) => {
         formData.append(key, value as string);
       });
-  
-      // Append file to FormData
+
       formData.append('file', {
         uri: asset.uri,
-        type: asset.type || 'image/jpeg', 
+        type: asset.type || 'image/jpeg',
         name: file_name,
       } as any);
-  
+
       const uploadResponse = await fetch(presigned_post.url, {
         method: 'POST',
         body: formData,
@@ -265,110 +264,64 @@ const App = () => {
           'Content-Type': 'multipart/form-data',
         },
       });
-  
+
       if (!uploadResponse.ok) {
         throw new Error(`Upload failed with status ${uploadResponse.status}`);
       }
-  
-      Alert.alert('Success', 'Image uploaded successfully');
-      pollForResult(file_name, job_id);
-    } catch (error: unknown) {
+
+      setCurrentJobId(job_id);
+      Alert.alert('Upload Successful', 'Image uploaded successfully. Processing will start automatically. You can check the status later.');
+    } catch (error) {
       console.error('Error in uploadImage:', error);
-      if (axios.isAxiosError(error) && error.response) {
-        console.error('Error response:', error.response.data);
-        console.error('Error status:', error.response.status);
-        console.error('Error headers:', error.response.headers);
-      }
       Alert.alert('Error', `Failed to upload image: ${(error as Error).message}`);
     } finally {
       setIsUploading(false);
     }
   };
 
-  const pollForResult = async (fileName: string, jobId: string) => {
-    setIsProcessing(true);
-    let retries = 0;
-    const maxRetries = 60; // Increased for longer processes
-    const initialRetryDelay = 5000; // 5 seconds
-    const longRetryDelay = 30000; // 30 seconds
-  
-    const poll = async () => {
-      try {
-        const credentials = await getCredentials();
-        console.log('Polling with credentials:', credentials.identityId);
-        
-        const response = await axios.get(`${API_URL}/get_job_status/${jobId}`, {
-          headers: {
-            'Authorization': `Bearer ${credentials.token}`
-          }
-        });
-  
-        const { status, image_url, keypoints_url, position, updatedAt } = response.data;
-  
-        console.log(`Job status: ${status}, Updated at: ${updatedAt}`);
-  
-        if (status === 'success') {
-          setResult({
-            keypointsImage: image_url,
-            positionName: position,
-          });
-          setIsProcessing(false);
-          Alert.alert('Processing Complete', `Your image has been processed. The detected position is: ${position}`);
-        } else if (status === 'PROCESSING' || !status) {
-          if (retries < maxRetries) {
-            console.log(`Still processing, retrying in ${retries < 12 ? initialRetryDelay : longRetryDelay / 1000} seconds...`);
-            retries++;
-            setTimeout(poll, retries < 12 ? initialRetryDelay : longRetryDelay);
-          } else {
-            console.error('Max retries reached');
-            Alert.alert('Error', 'Processing timed out');
-            setIsProcessing(false);
-          }
-        } else {
-          console.error('Unknown status:', status);
-          Alert.alert('Error', 'An unexpected error occurred. Please try again.');
-          setIsProcessing(false);
-        }
-      } catch (error) {
-        console.error('Error polling for result:', error);
-        if (axios.isAxiosError(error)) {
-          console.error('Error response:', error.response?.data);
-          console.error('Error status:', error.response?.status);
-          console.error('Error headers:', error.response?.headers);
-          
-          if (error.response?.status === 404) {
-            console.error('Job not found. It might not have been created yet.');
-            if (retries < maxRetries) {
-              console.log(`Job not found, retrying in ${initialRetryDelay / 1000} seconds...`);
-              retries++;
-              setTimeout(poll, initialRetryDelay);
-              return;
-            }
-          }
-          
-          if (error.response?.status === 403) {
-            console.error('Authentication error. Ensure your credentials are correct.');
-            Alert.alert('Error', 'Authentication failed. Please sign in again.');
-            setIsAuthenticated(false);
-          } else {
-            Alert.alert('Error', `Failed to get processing result: ${error.message}`);
-          }
-        } else {
-          Alert.alert('Error', 'An unexpected error occurred');
-        }
-        setIsProcessing(false);
-      }
-    };
-  
-    poll();
-  }
+  const checkProcessingStatus = async () => {
+    if (!currentJobId) {
+      Alert.alert('Error', 'No job in progress. Please upload an image first.');
+      return;
+    }
 
+    setIsProcessing(true);
+    try {
+      const credentials = await getCredentials();
+      const response = await axios.get(`${API_URL}/get_job_status/${currentJobId}`, {
+        params: { user_id: credentials.identityId },
+        headers: {
+          'Authorization': `Bearer ${credentials.token}`
+        }
+      });
+
+      const { status, s3_path, position } = response.data;
+
+      if (status === 'COMPLETED') {
+        setResult({
+          keypointImageUrl: s3_path,
+          predictedPosition: position,
+        });
+        Alert.alert('Processing Complete', `Your image has been processed. The detected position is: ${position}`);
+      } else if (status === 'PROCESSING') {
+        Alert.alert('In Progress', 'Your image is still being processed. Please check again later.');
+      } else if (status === 'FAILED') {
+        Alert.alert('Error', 'Image processing failed. Please try uploading again.');
+      } else {
+        Alert.alert('Unknown Status', `Current status: ${status}. Please try again later.`);
+      }
+    } catch (error) {
+      console.error('Error checking processing status:', error);
+      Alert.alert('Error', 'Failed to check processing status. Please try again.');
+    } finally {
+      setIsProcessing(false);
+    }
+  };
 
   if (!isAuthenticated) {
     if (changePasswordRequired) {
       return (
         <View style={styles.container}>
-          <Text>You need to change your password</Text>
           <TextInput
             style={styles.input}
             placeholder="New Password"
@@ -403,15 +356,26 @@ const App = () => {
 
   return (
     <View style={styles.container}>
-      <Button title="Pick an image" onPress={pickImage} />
-      <Button title="Sign Out" onPress={signOut} />
-      {isUploading && <Text>Uploading...</Text>}
-      {isProcessing && <Text>Processing...</Text>}
-      {selectedImage && <Image source={{ uri: selectedImage }} style={styles.image} />}
+      <View style={styles.buttonContainer}>
+        <Button title="Pick an image" onPress={pickImage} disabled={isUploading || isProcessing} />
+      </View>
+      <View style={styles.buttonContainer}>
+        <Button title="Sign Out" onPress={signOut} />
+      </View>
+      {isUploading && <ActivityIndicator size="large" color="#0000ff" />}
+      {currentJobId && (
+        <View style={styles.buttonContainer}>
+          <Button title="Check Processing Status" onPress={checkProcessingStatus} disabled={isProcessing} />
+        </View>
+      )}
+      {isProcessing && <ActivityIndicator size="large" color="#0000ff" />}
+      {selectedImage && (
+        <Image source={{ uri: selectedImage }} style={styles.image} />
+      )}
       {result && (
         <View>
-          <Image source={{ uri: result.keypointsImage }} style={styles.image} />
-          <Text style={styles.result}>Predicted Position: {result.positionName}</Text>
+          <Text style={styles.result}>Predicted Position: {result.predictedPosition}</Text>
+          <Image source={{ uri: result.keypointImageUrl }} style={styles.image} />
         </View>
       )}
     </View>
