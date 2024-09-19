@@ -1,3 +1,6 @@
+// @ts-nocheck
+/** @type {import('@types/node').NodeRequire} */
+
 const {getDefaultConfig, mergeConfig} = require('@react-native/metro-config');
 
 /**

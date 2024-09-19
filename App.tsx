@@ -1,7 +1,8 @@
 import React, { useState, useEffect } from 'react';
 import 'react-native-url-polyfill/auto';
-import { View, Button, Image, Text, StyleSheet, Alert, TextInput, ActivityIndicator } from 'react-native';
+import { View, Button, Image, Text, StyleSheet, Alert, TextInput, ScrollView } from 'react-native';
 import { launchImageLibrary, ImageLibraryOptions, Asset } from 'react-native-image-picker';
+import Video from 'react-native-video';
 import axios from 'axios';
 import { CognitoIdentityClient } from "@aws-sdk/client-cognito-identity";
 import { fromCognitoIdentityPool } from "@aws-sdk/credential-provider-cognito-identity";
@@ -26,9 +27,13 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     padding: 20,
   },
-  image: {
-    width: 200,
-    height: 200,
+  scrollView: {
+    flex: 1,
+    width: '100%',
+  },
+  media: {
+    width: 300,
+    height: 300,
     marginTop: 20,
   },
   result: {
@@ -44,17 +49,12 @@ const styles = StyleSheet.create({
     marginBottom: 10,
     paddingLeft: 10,
   },
-  buttonContainer: {
-    marginTop: 10,
-    width: '100%',
-  },
 });
 
 const App = () => {
-  const [selectedImage, setSelectedImage] = useState<string | null>(null);
+  const [selectedMedia, setSelectedMedia] = useState<string | null>(null);
   const [isUploading, setIsUploading] = useState(false);
-  const [isProcessing, setIsProcessing] = useState(false);
-  const [result, setResult] = useState<{ keypointImageUrl: string; predictedPosition: string } | null>(null);
+  const [result, setResult] = useState<{ mediaUrl: string; positionName: string; mediaType: 'image' | 'video' } | null>(null);
   const [isAuthenticated, setIsAuthenticated] = useState(false);
   const [username, setUsername] = useState('');
   const [password, setPassword] = useState('');
@@ -157,8 +157,6 @@ const App = () => {
       cognitoUser.signOut();
       setCognitoUser(null);
       setIsAuthenticated(false);
-      setResult(null);
-      setCurrentJobId(null);
     }
   };
 
@@ -203,12 +201,10 @@ const App = () => {
     });
   };
 
-  const pickImage = async () => {
+  const pickMedia = async () => {
     const options: ImageLibraryOptions = {
-      mediaType: 'photo',
+      mediaType: 'mixed',
       includeBase64: false,
-      maxHeight: 2000,
-      maxWidth: 2000,
     };
 
     try {
@@ -216,17 +212,17 @@ const App = () => {
       if (response.assets && response.assets.length > 0) {
         const asset = response.assets[0];
         if (asset.uri) {
-          setSelectedImage(asset.uri);
-          await uploadImage(asset);
+          setSelectedMedia(asset.uri);
+          await uploadMedia(asset);
         }
       }
     } catch (error) {
-      console.error('Error picking image:', error);
-      Alert.alert('Error', 'Failed to pick image');
+      console.error('Error picking media:', error);
+      Alert.alert('Error', 'Failed to pick media');
     }
   };
 
-  const uploadImage = async (asset: Asset) => {
+  const uploadMedia = async (asset: Asset) => {
     if (!asset.uri) return;
     setIsUploading(true);
     setResult(null);
@@ -234,17 +230,29 @@ const App = () => {
 
     try {
       const credentials = await getCredentials();
+      console.log('Obtained credentials:', credentials.identityId);
+      const mediaType = asset.type?.startsWith('video') ? 'video' : 'image';
+      console.log('Requesting upload URL for media type:', mediaType);
+
       const urlResponse = await axios.get(`${API_URL}/get_upload_url`, {
         params: { 
-          file_type: 'image',
-          user_id: credentials.identityId 
+          user_id: credentials.identityId, 
+          file_type: mediaType 
         },
         headers: {
           'Authorization': `Bearer ${credentials.token}`
         }
       });
 
+      console.log('Received upload URL response:', urlResponse.data);
+
       const { file_name, presigned_post, job_id } = urlResponse.data;
+
+      // Use the file_name as provided by the server
+      const actualFileName = file_name;
+
+      // Ensure the file is uploaded directly to the 'inputs' folder
+      //const actualFileName = `inputs/${file_name.split('/').pop()}`;
 
       const formData = new FormData();
       Object.entries(presigned_post.fields).forEach(([key, value]) => {
@@ -254,8 +262,10 @@ const App = () => {
       formData.append('file', {
         uri: asset.uri,
         type: asset.type || 'image/jpeg',
-        name: file_name,
+        name: actualFileName,
       } as any);
+
+      console.log(`Uploading file: ${actualFileName}`);
 
       const uploadResponse = await fetch(presigned_post.url, {
         method: 'POST',
@@ -269,11 +279,22 @@ const App = () => {
         throw new Error(`Upload failed with status ${uploadResponse.status}`);
       }
 
+      console.log(`File uploaded successfully. File name: ${actualFileName}, Job ID: ${job_id}`);
+
       setCurrentJobId(job_id);
-      Alert.alert('Upload Successful', 'Image uploaded successfully. Processing will start automatically. You can check the status later.');
+      if (mediaType === 'video') {
+        Alert.alert('Success', 'Video uploaded successfully. Processing may take longer for videos.');
+      } else {
+        Alert.alert('Success', 'Image uploaded successfully. You can now check the processing status.');
+      }
     } catch (error) {
-      console.error('Error in uploadImage:', error);
-      Alert.alert('Error', `Failed to upload image: ${(error as Error).message}`);
+      console.error('Error in uploadMedia:', error);
+      if (axios.isAxiosError(error)) {
+        console.error('Axios error details:', error.response?.data);
+        console.error('Axios error status:', error.response?.status);
+        console.error('Axios error headers:', error.response?.headers);
+      }
+      Alert.alert('Error', `Failed to upload media: ${(error as Error).message}`);
     } finally {
       setIsUploading(false);
     }
@@ -281,40 +302,38 @@ const App = () => {
 
   const checkProcessingStatus = async () => {
     if (!currentJobId) {
-      Alert.alert('Error', 'No job in progress. Please upload an image first.');
+      Alert.alert('Error', 'No job in progress. Please upload an image or video first.');
       return;
     }
 
-    setIsProcessing(true);
     try {
       const credentials = await getCredentials();
       const response = await axios.get(`${API_URL}/get_job_status/${currentJobId}`, {
-        params: { user_id: credentials.identityId },
+        params: { user_id: credentials.identityId },  // Add this line
         headers: {
           'Authorization': `Bearer ${credentials.token}`
         }
       });
 
-      const { status, s3_path, position } = response.data;
+      const { status, image_url, video_url, position, file_type } = response.data;
 
       if (status === 'COMPLETED') {
         setResult({
-          keypointImageUrl: s3_path,
-          predictedPosition: position,
+          mediaUrl: file_type === 'image' ? image_url : video_url,
+          positionName: position,
+          mediaType: file_type as 'image' | 'video'
         });
-        Alert.alert('Processing Complete', `Your image has been processed. The detected position is: ${position}`);
+        Alert.alert('Processing Complete', `Your ${file_type} has been processed. The detected position is: ${position}`);
       } else if (status === 'PROCESSING') {
-        Alert.alert('In Progress', 'Your image is still being processed. Please check again later.');
+        Alert.alert('In Progress', 'Your media is still being processed. Please check again later.');
       } else if (status === 'FAILED') {
-        Alert.alert('Error', 'Image processing failed. Please try uploading again.');
+        Alert.alert('Error', 'Media processing failed. Please try uploading again.');
       } else {
         Alert.alert('Unknown Status', `Current status: ${status}. Please try again later.`);
       }
     } catch (error) {
       console.error('Error checking processing status:', error);
       Alert.alert('Error', 'Failed to check processing status. Please try again.');
-    } finally {
-      setIsProcessing(false);
     }
   };
 
@@ -355,30 +374,25 @@ const App = () => {
   }
 
   return (
-    <View style={styles.container}>
-      <View style={styles.buttonContainer}>
-        <Button title="Pick an image" onPress={pickImage} disabled={isUploading || isProcessing} />
-      </View>
-      <View style={styles.buttonContainer}>
-        <Button title="Sign Out" onPress={signOut} />
-      </View>
-      {isUploading && <ActivityIndicator size="large" color="#0000ff" />}
-      {currentJobId && (
-        <View style={styles.buttonContainer}>
-          <Button title="Check Processing Status" onPress={checkProcessingStatus} disabled={isProcessing} />
-        </View>
-      )}
-      {isProcessing && <ActivityIndicator size="large" color="#0000ff" />}
-      {selectedImage && (
-        <Image source={{ uri: selectedImage }} style={styles.image} />
+    <ScrollView contentContainerStyle={styles.container}>
+      <Button title="Pick an image or video" onPress={pickMedia} />
+      <Button title="Sign Out" onPress={signOut} />
+      {isUploading && <Text>Uploading...</Text>}
+      {currentJobId && <Button title="Check Processing Status" onPress={checkProcessingStatus} />}
+      {selectedMedia && (
+        <Image source={{ uri: selectedMedia }} style={styles.media} />
       )}
       {result && (
         <View>
-          <Text style={styles.result}>Predicted Position: {result.predictedPosition}</Text>
-          <Image source={{ uri: result.keypointImageUrl }} style={styles.image} />
+          <Text style={styles.result}>Predicted Position: {result.positionName}</Text>
+          {result.mediaType === 'image' ? (
+            <Image source={{ uri: result.mediaUrl }} style={styles.media} />
+          ) : (
+            <Video source={{ uri: result.mediaUrl }} style={styles.media} controls />
+          )}
         </View>
       )}
-    </View>
+    </ScrollView>
   );
 };
 
